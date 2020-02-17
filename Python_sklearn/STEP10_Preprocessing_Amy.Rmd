@@ -1,0 +1,181 @@
+---
+title: "Doctor Type ML Pre-processing"
+author: "Amy Jin"
+date: "6/11/2018"
+output: html_document
+---
+
+# 1 Load CSV and Install Packages
+```{r}
+data <- read.csv("/Users/yuejin/Documents/AmyJin_2018/Work/Test/2018_03/Doctor_Type_ML/final_table2.csv", header =T)
+```
+
+Packages to install:
+```{r}
+library(caret)
+library(ggplot2)
+library(tidyverse)
+library(reshape2)
+library(randomForest)
+library(e1071)
+library(caret)
+library(ROCR)
+```
+
+# 2 Split Data into Train and Test Sets
+
+Separating data into training and testing sets is an important part of evaluating data mining models. Typically, when you separate a data set into a training set and testing set, most of the data is used for training, and a smaller portion of the data is used for testing. Analysis Services randomly samples the data to help ensure that the testing and training sets are similar. By using similar data for training and testing, you can minimize the effects of data discrepancies and better understand the characteristics of the model.
+
+We will split the loaded dataset into two, 80% of which we will use to train and validate our models and 20% that we will hold back as a test dataset.
+
+```{r}
+# create a list of 80% of the rows in the original dataset we can use for training and validation
+train_index <- createDataPartition(data$Y_is_oncologist, p=0.80, list=FALSE)
+# select 20% of the data for test
+test <- data[-train_index,]
+nrow(test)
+# use the remaining 80% of data to training the models
+train <- data[train_index,]
+nrow(train)
+```
+
+
+# 3 Summarize Dataset
+
+Now it is time to take a look at the data. 
+In this step we are going to take a look at the data a few different ways:
+
+* Dimensions of the dataset.
+* Types of the attributes.
+* Peek at the data itself.
+* Levels of the class attribute.
+* Breakdown of the instances in each class.
+* Statistical summary of all attributes.
+
+# 3.1 Dimensions of Dataset
+We can get a quick idea of how many instances (rows) and how many features (columns) the data contains with the dim function.
+
+```{r}
+dim(train)
+colnames(train)
+```
+Therea are 148795 instances and 10 features (X) and 1 predictor (Y). 
+
+# 3.2 Types of Attributes
+It is a good idea to get an idea of the types of the attributes. They could be doubles, integers, strings, factors and other types.
+
+Knowing the types is important as it will give you an idea of how to better summarize the data you have and the types of transforms you might need to use to prepare the data before you model it.
+Let's see the summary of the data.
+
+```{r}
+train$Y_is_oncologist = factor(train$Y_is_oncologist)
+sapply(train, class)
+```
+
+Y_is_oncologist is categorical, so it is factor here. 
+
+```{r}
+summary(data)
+```
+
+## 3.3 Peek at the Data
+It is also always a good idea to actually eyeball your data. The first 5 rows of the data are given: 
+```{r}
+head(train)
+```
+
+## 3.4 Levels of the Class
+The class variable is a factor. A factor is a class that has multiple class labels or levels. Let’s look at the levels:
+```{r}
+levels(train$Y_is_oncologist)
+```
+
+From the result, we can see that the class has 2 labels: 0 and 1. 
+
+## 3.5 Class Distribution 
+Let’s now take a look at the number of instances (rows) that belong to each class. We can view this as an absolute count and as a percentage.
+
+```{r}
+# summarize the class distribution
+percentage <- prop.table(table(train$Y_is_oncologist)) * 100
+cbind(freq=table(train$Y_is_oncologist), percentage=percentage)
+```
+
+From the table above, we can see that there are only 0.3199% of the train data are in class 1, which means that the data is super unbalanced. To have better prediction error, it's better to make it balanced. One way of balancing the data is bootstrap. We will try boostrap later.
+
+## 3.6 Statistical Summary
+Now finally, we can take a look at a summary of each attribute.
+
+This includes the mean, the min and max values as well as some percentiles (25th, 50th or media and 75th e.g. values at this points if we ordered all the values for an attribute).
+
+```{r}
+summary(train)
+```
+
+We can see that all of the X features have similar ranges [0,1].
+How are they correlated? 
+```{r}
+pairs(train[,c(2, 5:14)])
+```
+
+```{r}
+library(corrplot)
+M <- cor(train[,c(5:14)])
+corrplot(M, method = "circle")
+```
+
+# 4 Visualize Dataset
+We now have a basic idea about the data. We need to extend that with some visualizations. We are going to look at two types of plots:
+
+Univariate plots to better understand each attribute.
+Multivariate plots to better understand the relationships between attributes.
+
+## 4.1 Univariate Plots
+We start with some univariate plots, that is, plots of each individual variable.
+
+It is helpful with visualization to have a way to refer to just the input attributes and just the output attributes. Let’s set that up and call the inputs attributes x and the output attribute (or class) y.
+
+
+```{r}
+ggplot(data = melt(train), mapping = aes(x = value)) + 
+    geom_histogram(bins = 30) + facet_wrap(~variable, scales = 'free_x')
+```
+
+We could also create box and whisker plots of each.
+```{r}
+# boxplot for each attribute on one image
+par(mfrow=c(2,5))
+  for(i in c(5:14)) {
+  boxplot(train[,i], main=names(train)[i])
+}
+```
+
+Both histograms and box plots give us clear idea of the distribution of the input features. Things I see from these plots:
+
+* All of X columns are distributed around 0. 
+* Not only Y is unbalanced, X's are also unbalanced in the binary classification. May need to try both sub-sampling the over-represented class, and over-sampling the under-represented class. Multi-class classification might be better since we could check if all the classes are unbalanced.  
+
+We can also create a barplot of the doctor type variable to get a graphical representation of the class distribution (generally uninteresting in this case because they’re even). This confirms what we learned in the last section, that the instances are not evenly distributed across the 2 classes:
+
+```{r, fig.height=3, fig.width=3}
+plot(train[,2])
+```
+
+## 4.2 Multivariate Plots
+Now we can look at the interactions between the variables.
+
+First let’s look at scatterplots of all pairs of attributes and color the points by class. In addition, because the scatterplots show that points for each class are generally separate, we can draw ellipses around them.
+
+```{r}
+featurePlot(x = train[,5:14], y = train[,2] , plot = "box")
+```
+
+We can also look at box and whisker plots of each input variable again, but this time broken down into separate plots for each class. This can help to tease out obvious linear separations between the classes. This is useful to see if there are clearly different distributions of the attributes for each class value.
+
+Next we can get an idea of the distribution of each attribute, again like the box, broken down by class value. Sometimes histograms are good for this, but in this case we will use some probability density plots to give nice smooth lines for each distribution.
+
+```{r}
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+featurePlot(x=train[,5:14], y=train[,2], plot="density", scales=scales)
+```
+

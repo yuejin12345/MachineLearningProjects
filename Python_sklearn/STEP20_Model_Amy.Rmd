@@ -1,0 +1,250 @@
+---
+title: "Doctor Type ML Models"
+author: "Amy Jin"
+date: "6/12/2018"
+output: html_document
+---
+```{r, echo=FALSE, error = F, message=F, warning=F}
+library(caret)
+library(ggplot2)
+library(tidyverse)
+library(reshape2)
+library(randomForest)
+library(e1071)
+library(caret)
+library(ROCR)
+library(MASS)
+library(scales)
+library(gridExtra)
+library(rattle)
+data <- read.csv("/Users/yuejin/Documents/AmyJin_2018/Work/Test/2018_03/Doctor_Type_ML/final_table2.csv", header =T)
+train_index <- createDataPartition(data$Y_is_oncologist, p=0.80, list=FALSE)
+test <- data[-train_index,]
+train <- data[train_index,]
+train$Y_is_oncologist = factor(train$Y_is_oncologist)
+```
+
+# 5 Evaluate Some Algorithms
+Now it is time to create some models of the data and estimate their accuracy on unseen data.
+Here are the steps:
+
+* Set-up the evaluaion method.
+* Build a couple basic models to predict Y from X.
+* Select the best model.
+
+## 5.1 Classification Evaluation Method
+
+Typically ,we are using the metric of “Accuracy” to evaluate models. This is a ratio of the number of correctly predicted instances in divided by the total number of instances in the dataset multiplied by 100 to give a percentage (e.g. 95% accurate). We will be using the metric variable when we run build and evaluate each model next. However, in this case, we have unbalanced data, accuracy is not enough to give us clear idea on the performance. Thus, the following 5 methods are adopted to evaluate predictive models: 
+
+* Accuracy
+* Confusion Matrix
+* ROC
+* AIC
+* Null Deviance and Residual Deviance
+
+## 5.2 Build Models
+We don’t know which algorithms would be good on this problem or what configurations to use. We get an idea from the plots that some of the classes are partially linearly separable in some dimensions, so we are expecting generally good results.
+
+Let’s evaluate 5 different algorithms:
+
+* Logistic Regression
+* Linear Discriminant Analysis (LDA)
+* Classification and Regression Trees (CART).
+* k-Nearest Neighbors (kNN).
+* Support Vector Machines (SVM) with a linear kernel.
+* Random Forest (RF)
+
+
+This is a good mixture of simple linear (LDA), nonlinear (CART, kNN, Logistic) and complex nonlinear methods (SVM, RF). We reset the random number seed before reach run to ensure that the evaluation of each algorithm is performed using exactly the same data splits. It ensures the results are directly comparable.
+
+### 5.2.1 Logistic Regression
+
+#### Building the Model
+
+Now, let’s fit the model. Be sure to specify the parameter family=binomial in the glm() function.
+```{r}
+model <- glm(Y_is_oncologist ~ X_96413+X_96367+X_96361+X_80053+X_G0008+X_83615+X_82728+X_83550+X_J3490+X_Q2037 ,family=binomial(link='logit'),data=train)
+```
+
+Logistic regression model summary is: 
+```{r}
+summary(model)
+## CIs using profiled log-likelihood
+confint(model)
+## CIs using standard errors
+confint.default(model)
+```
+
+#### Performance of Model
+How does the model work for unknown test data? There are 5 ways： 
+
+1. The first evaluation is by computing accuracy. The accuracy for the test data is: (37062+1)/(37062+1+124+11)=0.9963708. Train accuracy is 0.9966799959.
+
+2. Another way to evaluate classification performance is confusion matrix. From the confusion matrix, we can see that 1 out of 112 true true positive examples, and 37074 true negative examples. 
+
+```{r}
+fitted.results <- predict(model,newdata=train[5:14],type='response')
+fitted.results <- ifelse(fitted.results > 0.5,1,0)
+misClasificError <- mean(fitted.results != train$Y_is_oncologist)
+print(paste('Accuracy',1-misClasificError))
+# Use your model to make predictions, in this example newdata = training set
+pdata <- predict(model, newdata = train[,5:14], type = "response")
+# use caret and compute a confusion matrix
+confusionMatrix(data = as.factor(as.numeric(pdata>0.5)), Class = as.factor(train$Y_is_oncologist))
+
+fitted.results <- predict(model,newdata=test[5:14],type='response')
+fitted.results <- ifelse(fitted.results > 0.5,1,0)
+misClasificError <- mean(fitted.results != test$Y_is_oncologist)
+print(paste('Accuracy',1-misClasificError))
+
+# Use your model to make predictions, in this example newdata = test set 
+pdata <- predict(model, newdata = test[,5:14], type = "response")
+# use caret and compute a confusion matrix
+confusionMatrix(data = as.factor(as.numeric(pdata>0.5)), Class = as.factor(test$Y_is_oncologist))
+```
+
+3. ROC Curve is a third way. Receiver Operating Characteristic(ROC) summarizes the model’s performance by evaluating the trade offs between true positive rate (sensitivity) and false positive rate(1- specificity). For plotting ROC, it is advisable to assume p > 0.5 since we are more concerned about success rate. ROC summarizes the predictive power for all possible values of p > 0.5.  The area under curve (AUC), referred to as index of accuracy(A) or concordance index, is a perfect performance metric for ROC curve. Higher the area under curve, better the prediction power of the model. Below is a sample ROC curve. The ROC of a perfect predictive model has TP equals 1 and FP equals 0. This curve will touch the top left corner of the graph.
+
+4. AIC (Akaike Information Criteria) – The analogous metric of adjusted R² in logistic regression is AIC. AIC is the measure of fit which penalizes model for the number of model coefficients. Therefore, we always prefer model with minimum AIC value. For this model, AIC is 5546.9 The samller the better, we could compare the AIC with other models later.
+
+5. Null Deviance and Residual Deviance – Null Deviance indicates the response predicted by a model with nothing but an intercept. Lower the value, better the model. Residual deviance indicates the response predicted by a model on adding independent variables. Lower the value, better the model.
+
+```{r, fig.height=3, fig.width=3}
+p <- predict(model, newdata=test[5:14], type="response")
+pr <- prediction(p, test$Y_is_oncologist)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+```
+
+From both confusion matrix and ROC, we can see that logistic regression with the train data is not satisfiying. Either there is nonlinearity or the features of X are not good. 
+
+### 5.2.2 LDA
+
+We will use the same set of features that are used in Logistic regression and create the LDA model. The model has the following output as explained below:
+
+Prior probabilities of groups – This defines the prior probability of the response classes for an observation. This shows 99.6774085 % of the doctors are in class o and .3225915 % of doctors are in class 1.
+
+Group Means – This defines the mean value ($\mu k$) for response classes for a particular X=x. This indicates means values of different features when they fall to a particular response class. For example, we see a clear difference between the proportion of class (0.000652917 vs 0.035520315) for X_96367. The more the difference between mean, the easier it will be to classify observation.
+Coefficients of the linear discriminants – This defines the coefficient of the linear equation that is used to classify the response classes. Note that in this model there are only two response classes and so there will be only one set of coefficients (LD1).
+
+```{r}
+attach(train)
+lda.model <- lda(factor(train$Y_is_oncologist) ~ X_96413+X_96367+X_96361+X_80053+X_G0008+X_83615+X_82728+X_83550+X_J3490+X_Q2037, data = train)
+lda.model
+```
+
+#### Performance of Model
+
+As the next step, we will find the model accuracy and confusion matrix for training data. Here we get the train accuracy of (147178+157)/(147178+157+1148+312) = 0.9901878 
+
+```{r}
+##Predicting training results.
+predmodel.train.lda = predict(lda.model, data=train[,5:14])
+#length(train$Y_is_oncologist)
+#length(predmodel.train.lda$class)
+table(Predicted=predmodel.train.lda$class, Class=train$Y_is_oncologist)
+```
+
+The below plot shows how the response class has been classified by the LDA classifier. The X-axis shows the value of line defined by the co-efficient of linear discriminant for LDA model. The two groups are the groups for response classes.
+
+```{r}
+ldahist(predmodel.train.lda$x[,1], g= predmodel.train.lda$class)
+```
+
+Now we will check for model accuracy for test data (36771+41)/(36771+41+79+307)= 0.9896231. And the confusin matrix is:
+
+```{r}
+attach(test)
+predmodel.test.lda = predict(lda.model, newdata=test[,5:14])
+table(Predicted=predmodel.test.lda$class, Class=test$Y_is_oncologist)
+```
+The below figure shows how the test data has been classified. The Predicted Group-1 and Group-2 has been colored with actual classification with red and green color. The mix of red and green color in the Group-1 and Group-2 shows the incorrect classification prediction.
+
+```{r}
+par(mfrow=c(1,1))
+plot(predmodel.test.lda$x[,1], predmodel.test.lda$class, col=test$Y_is_oncologist+10)
+```
+
+ROC Curve: 
+
+```{r, fig.height=3, fig.width=3}
+p <- predict(lda.model, newdata=test[5:14], type="response")
+pr <- prediction(p$x, as.factor(test$Y_is_oncologist))
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+```
+
+### 5.2.3 QDA Model
+
+Next we will fit the model to QDA as below. The equation is same as LDA and it outputs the prior probabilities and Group means. Please note that ‘prior probability’ and ‘Group Means’ values are same as of LDA. However, unlike LDA, QDA assumes that each class has its own covariance matrix. In other words, the predictor variables are not assumed to have common variance across each of the k levels in Y. 
+
+```{r}
+qda.model <- qda(factor(train$Y_is_oncologist) ~ X_96413+X_96367+X_96361+X_80053+X_G0008+X_83615+X_82728+X_83550+X_J3490+X_Q2037, data = train)
+qda.model
+```
+
+#### Performance of Model
+In the next step, we will predict for training and test observation and check for their accuracy. Here training data accuracy: (145924+163)/(145924+163+317+2391) = 0.9818005 and testing accuracy is (36514+45)/(36514+45+64+575)=0.9828217.
+
+```{r}
+##Predicting training results.
+predmodel.train.qda = predict(qda.model, data=train[,5:14])
+table(Predicted=predmodel.train.qda$class, Class=train$Y_is_oncologist)
+```
+
+```{r}
+##Predicting test results.
+attach(test)
+predmodel.test.qda = predict(qda.model, newdata=test[,5:14])
+table(Predicted=predmodel.test.qda$class, Class=test$Y_is_oncologist)
+```
+
+The below figure shows how the test data has been classified using the QDA model. The Predicted Class 0 and Class 1 has been colored with actual classification with red and green color. The mix of red and green color in the Class 0 and Class 1 shows the incorrect classification prediction.
+```{r}
+par(mfrow=c(1,1))
+plot(predmodel.test.qda$posterior[,2], predmodel.test.qda$class, col=test$Y_is_oncologist+10)
+```
+
+ROC curve ans AUC: 
+
+```{r, fig.height=3, fig.width=3}
+# ROC curves
+library(ROCR)
+#par(mfrow=c(1, 2))
+# prediction(predmodel.test.lda$posterior[,2], test$Y_is_oncologist) %>%
+#   performance(measure = "tpr", x.measure = "fpr") %>%
+#   plot()
+prediction(predmodel.test.qda$posterior[,2], test$Y_is_oncologist) %>%
+  performance(measure = "tpr", x.measure = "fpr") %>%
+  plot()
+```
+
+```{r}
+# model 1 AUC
+prediction(predmodel.test.lda$posterior[,2], test$Y_is_oncologist) %>%
+  performance(measure = "auc") %>%
+  .@y.values
+
+# model 2 AUC
+prediction(predmodel.test.qda$posterior[,2], test$Y_is_oncologist) %>%
+  performance(measure = "auc") %>%
+  .@y.values
+```
+
+The logistic regression and LDA methods are closely connected and differ primarily in their fitting procedures. Consequently, the two often produce similar results. However, LDA assumes that the observations are drawn from a Gaussian distribution with a common covariance matrix across each class of Y, and so can provide some improvements over logistic regression when this assumption approximately holds. Conversely, logistic regression can outperform LDA if these Gaussian assumptions are not met. Both LDA and logistic regression produce linear decision boundaries so when the true decision boundaries are linear, then the LDA and logistic regression approaches will tend to perform well. QDA, on the other-hand, provides a non-linear quadratic decision boundary. Thus, when the decision boundary is moderately non-linear, QDA may give better results.
+
+LDA and QDA work well when class separation and normality assumption holds true in the dataset. If the dataset is not normal then Logistic regression has an edge over LDA and QDA model. Logistic regression does not work properly if the response classes are fully separated from each other. In general, logistic regression is used for binomial classification and in case of multiple response classes, LDA and QDA are more popular. And no one method will dominate the others in every situation. And often, we want to compare multiple approaches to see how they compare. 
+
+### 5.2.4 Classification and Regression Trees (CART)
+
+```{r}
+
+```
+
+
